@@ -1,0 +1,156 @@
+---
+title: "David Coit HW_4"
+author: "David Coit"
+date: "11/7/2019"
+output: html_document
+---
+
+## Homework
+
+1. Compare the most important features from at least 2 different classes of feature selection methods covered in this tutorial with any reasonable machine learning dataset from mlbench. Do these feature selection methods provide similar results? 
+
+2. Attempt a feature selection method not covered in this tutorial (backward elimination, forward propogation, etc.)
+
+
+### Question 1
+
+**I chose to work with the Glass dataset from mlbench. Since it works with this assignment as a material identification task, it has at least tangential relevance to the class as a scientifc task. There are also enough predictor variables (9) to make some meaningful comparisons between feature selection methods.**
+
+
+```{r message = FALSE}
+# Load libraries
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(mlbench)
+library(glmnet)
+library(corrplot)
+library(foreign)
+library(nnet)
+library(LogicReg)
+library(logicFS)
+```
+
+
+```{r}
+# Clear workspace and import glass data set
+rm(list = ls())
+data(Glass)
+```
+
+
+```{r}
+# Transform glass data set to make sure predictor variable values are numeric
+glass_num = transform(Glass, 
+                      RI = as.numeric(RI),
+                      Na = as.numeric(Na),
+                      Mg = as.numeric(Mg),
+                      Al = as.numeric(Al), 
+                      Si = as.numeric(Si),
+                      K = as.numeric(K),
+                      Ca = as.numeric(Ca),
+                      Ba = as.numeric(Ba),
+                      Fe = as.numeric(Fe),
+                      Type = as.factor(Type)
+                        )
+# Check for NA values
+any(is.na(glass_num))
+```
+
+
+```{r}
+# Check for variables in the dataset that are correlated
+correlation_matrix = cor(glass_num[,1:9])
+corrplot(correlation_matrix, order = "hclust")
+corrplot(correlation_matrix, method = "number")
+
+
+highly_correlated <- colnames(glass_num[, -1])[findCorrelation(correlation_matrix, cutoff = 0.5, verbose = TRUE)]
+
+```
+**In the glass data, among the 9 predictor variables of glass type the variable refractive index does have correlation greater than 0.5 with two other variables - calcium and silicon. I am not sure why the output of the "highly_correlated" line says that all correlations are <=0.5 - when we display the actual values in the correlation plot we can plainly see the two values which exceed 0.5.  **
+
+
+
+```{r}
+# Random forest feature importance
+set.seed(1618)
+train_size <- floor(0.75 * nrow(glass_num))
+train_pos <- sample(seq_len(nrow(glass_num)), size = train_size)
+
+train_classification <- glass_num[train_pos, ]
+test_classification <- glass_num[-train_pos, ]
+
+#fit a model
+rfmodel = randomForest(Type ~ ., 
+                       data=train_classification,  
+                       importance = TRUE, 
+                       oob.times = 15, 
+                       confusion = TRUE,
+                       )
+
+# rank features based on importance 
+importance(rfmodel)
+
+# Check results on test set
+predCheckResponse <- predict(rfmodel, test_classification, type = "response")
+
+
+# Checking classification accuracy
+# Generate confusion matrix
+# Rows are predictions, columns are truth
+table(predCheckResponse, test_classification$Type)
+
+```
+**Based on the observed "mean decrease in accuracy" values,the most important variables in the randomforest predictive model are the refractive index RI, Alumninum Al, and magnesium MG which all lead to a mean decrease in model accuracy of > 30% when omitted. **
+
+
+
+```{r warning=FALSE}
+# RFE requires prediction classes to start with non-numeric characters
+# Prepend "T" to the numerical values in the Type column
+# Save the original column in variable "placeholder" and replace original values
+# after code chunk runs 
+placeholder = glass_num$Type
+glass_num$Type <- paste0("T",glass_num$Type)
+
+# define the control function
+# Run 10-fold
+control = rfeControl(functions = caretFuncs, 
+                     number = 3
+                     )
+
+# run the RFE algorithm
+rfe_results = rfe(x = glass_num[,1:9], 
+              y = glass_num[,10], 
+              sizes = c(2,3,4,5,7,8), 
+              rfeControl = control, 
+              method = "svmRadial",
+              metric= "Accuracy")
+
+rfe_results
+rfe_results$variables
+plot(rfe_results)
+
+predictors(rfe_results)
+glass_num$Type <- placeholder
+```
+
+**Although running this code produces an output, I am extremely skeptical of the results. I had to include "warning = FALSE" in this code chunk header because calling rfe() kept throwing an error multiple times per execution that read:**
+**"There were missing importance values. There may be linear dependencies in your predictor variables."**
+**I strongly question these results not only because it selects "Fe" as a variable (which the random forest model results above suggest is not an important variable), but because the variables which are selected as the top 5 most important happen to be the first 5 of the variables listed in alphabetical order.**
+**I have tried troubleshooting this problem extensively to no avail.**
+
+
+### Question 2
+
+```{r}
+# Use backward elimination to build a model
+
+# Start with a multinomial model built from all possible variables using "multinom" from the nnet library
+multinom_model <- multinom(Type ~ ., data = glass_num)
+step(multinom_model, direction = "backward")
+```
+
+**The result from this backward elimination process in agreement some of the earlier results. For example, the first feature to be eliminated from our model is the refractive index RI. According to the random forest model results, this variable had the highest average decrease in model accuracy when removed from the model. On the other hand, RI also had the some of the highest correlation with other variables, and so maybe its removal makes sense in this respect. The second variable to be removed was iron Fe, which according to the variable importance values from the random forest model above had the lowest impact on model accuracy when removed.  **
+
